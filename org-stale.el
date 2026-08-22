@@ -10,6 +10,7 @@
 (setq org-agenda-files (list "/mnt/dietpi_userdata/syncthing/notes/org"))
 (defvar org-archive-file "/mnt/dietpi_userdata/syncthing/notes/org/arkiv.org"
   "Path to the single file all stale entries are archived into.")
+(setq backup-directory-alist '(("." . "/tmp")))
 
 (defun my/is-time-past (time)
   "Non-nil if TIME's day is strictly before today."
