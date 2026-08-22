@@ -1,0 +1,124 @@
+#!/bin/bash
+
+# Copies missing album directories from the source
+# directory to the destination directory.
+# Note: playlist folder excluded
+
+usage() {
+    echo "Usage: $0 [--dry-run] [--help] <destination_music_path>"
+}
+
+list_albums() {
+    local base="$1"
+    base="${base%/}"
+
+    while IFS= read -r line; do
+	relative="${line#$base/}"
+	echo "$relative"
+    done < <(find "$base" -mindepth 2 -maxdepth 2 -type d | LC_ALL=C sort)
+}
+
+dry_run_flag=""
+verbose_flag=""
+source_base="$HOME/Music"
+dest_mount=""
+dest_base=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+	--dry-run)
+	    dry_run_flag="--dry-run"
+	    shift
+	    ;;
+	-v)
+	    verbose_flag="-v"
+	    shift
+	    ;;
+	--help|-h)
+	    usage
+	    exit 0
+	    ;;
+	*)
+	    dest_base="$1"
+	    shift
+	    ;;
+    esac
+done
+
+if [[ -z "$dest_base" ]]; then
+    usage
+    exit 1
+fi
+
+dest_mount=$(findmnt -n -o TARGET --target "$dest_base")
+
+if [[ -z "$dest_mount" ]]; then
+    echo "Error: could not determine mount point for $dest_base. Aborting."
+    exit 1
+fi
+
+mapfile -t source_albums < <(list_albums "$source_base")
+mapfile -t dest_albums < <(list_albums "$dest_base")
+mapfile -t missing_albums < <(LC_ALL=C comm -23 <(printf '%s\n' "${source_albums[@]}") <(printf '%s\n' "${dest_albums[@]}"))
+
+if [[ "${#missing_albums[@]}" -eq 0 ]]; then
+    echo "No missing albums. Exiting now."
+    exit 0
+fi
+
+echo "${#missing_albums[@]} album(s) will be copied to $dest_base:"
+echo
+
+for album in "${missing_albums[@]}"; do
+    echo "$album"
+done
+
+echo
+read -p "Is this ok [y/N]: " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    exit 1
+fi
+echo
+
+success_count=0
+failed_albums=()
+
+for relative in "${missing_albums[@]}"; do
+    source_path="$source_base/$relative"
+    dest_path="$dest_base/$relative"
+    echo "Copying: $relative"
+    rsync -a --mkpath $verbose_flag $dry_run_flag "$source_path/" "$dest_path/"
+    rsync_status=$?
+    if [[ $rsync_status -eq 0 ]]; then
+	((success_count++))
+    else
+	failed_albums+=("$relative")
+	echo "  Failed to copy: $relative (exit code $rsync_status)"
+    fi
+done
+
+echo
+echo "SUMMARY: $success_count success(es), ${#failed_albums[@]} fail(s)"
+
+if [[ "${#failed_albums[@]}" -gt 0 ]]; then
+    echo
+    echo "Failed transfers:"
+    for album in "${failed_albums[@]}"; do
+	echo "  $album"
+    done
+fi
+
+mapfile -t extra_on_device < <(LC_ALL=C comm -13 <(printf '%s\n' "${source_albums[@]}") <(printf '%s\n' "${dest_albums[@]}"))
+
+if [[ "${#extra_on_device[@]}" -gt 0 ]]; then
+    echo
+    echo "Extra albums on $dest_base:"
+    for album in "${extra_on_device[@]}"; do
+	echo "  $album"
+    done
+fi
+
+if [[ "${#failed_albums[@]}" -gt 0 ]]; then
+    exit 1
+fi

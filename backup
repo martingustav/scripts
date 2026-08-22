@@ -1,0 +1,59 @@
+#!/bin/bash
+
+# Compress selected dirs in home and move the
+# compressed archive to external storage
+
+echo -e "This script will compress the following directories into a tarball and place them in the desired location.\n"
+
+# Define directories to backup
+selected_dirs=(
+    "Documents"
+    "dotfiles"
+    "notes"
+    "Pictures"
+    "Projects"
+    "scripts"
+)
+
+# Print selected directories
+echo "Directories to backup:"
+echo
+for dir in "${selected_dirs[@]}"; do
+    echo "  - $dir"
+done
+echo
+
+read -e -i "/run/media/najjt/Backup/Backups" -p "Enter path to place backup: " -r backup_dir
+backup_dir="${backup_dir/#\~/$HOME}"
+
+echo
+echo "Compressing home directory..."
+
+backup_file="backup-$(date +%F).tar.gz"
+
+tar -czf "$backup_file" -C /home/najjt "${selected_dirs[@]}"
+
+echo " done."
+
+# Create destination directory
+mkdir -p "$backup_dir/$(date +%F)"
+
+echo
+echo "Moving backup to external storage..."
+
+mv -v "$backup_file" "$backup_dir/$(date +%F)/"
+
+echo " done."
+
+# Calculate minutes and seconds
+minutes=$((SECONDS / 60))
+seconds=$((SECONDS % 60))
+
+# Conditional formatting for the output message
+if [ $minutes -gt 0 ]; then
+    echo
+    echo -e "\033[1mBackup completed.\033[0m It took $minutes minute(s) and $seconds second(s) to execute."
+else
+    echo
+    echo -e "\033[1mBackup completed.\033[0m It took $seconds second(s) to execute."
+fi

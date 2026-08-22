@@ -1,0 +1,19 @@
+#!/bin/bash
+
+# Check if systemd is available and managing Emacs
+if systemctl --user is-active --quiet emacs 2>/dev/null; then
+    echo "Systemd-managed Emacs detected, restarting..."
+    systemctl --user restart emacs
+else
+    echo "No systemd service, checking for Emacs daemon..."
+
+    # Kill only daemon processes, not GUI emacs
+    if pgrep -f "emacs.*--daemon" > /dev/null; then
+        echo "Found Emacs daemon, stopping gracefully..."
+        emacsclient -e '(kill-emacs)' 2>/dev/null || pkill -f "emacs.*--daemon"
+        sleep 1
+    fi
+
+    echo "Starting Emacs daemon..."
+    emacs --daemon > /dev/null 2>&1
+fi
