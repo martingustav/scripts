@@ -3,7 +3,7 @@
 ;; Meant to be run unattended via:
 ;;   emacs --batch -l org-stale.el
 ;; Loading this file has a side effect: the very last line calls
-;; my/org-archive-stale-entries, which archives entries and saves buffers.
+;; my/archive-stale-org-entries, which archives entries and saves buffers.
 ;; Don't load it inside a normal interactive session unless that's what you want.
 
 (require 'org)
@@ -12,11 +12,11 @@
   "Path to the single file all stale entries are archived into.")
 (setq backup-directory-alist '(("." . "/tmp")))
 
-(defun my/is-time-past (time)
-  "Non-nil if TIME's day is strictly before today."
-  (< (time-to-days time) (time-to-days (current-time))))
+(defun my/is-time-older-than (time days)
+  "Non-nil if TIME's day is older than DAY's days ago."
+  (< (time-to-days time) (time-to-days (time-subtract (current-time) (days-to-time days)))))
 
-(defun my/entry-has-past-plain-timestamp-p ()
+(defun my/org-entry-has-past-plain-timestamp-p ()
   "Non-nil if the entry at point contains a plain timestamp before today.
 Looks at bare timestamps in the entry body (e.g. from the \"Calendar
 event\" capture template), not SCHEDULED/DEADLINE properties."
@@ -32,25 +32,22 @@ event\" capture template), not SCHEDULED/DEADLINE properties."
       (org-back-to-heading t)
       (forward-line 1) ; skip past the heading line itself
       (when (re-search-forward org-ts-regexp-both end t)
-	(my/is-time-past (org-time-string-to-time (match-string 0)))))))
+	(my/is-time-older-than (org-time-string-to-time (match-string 0)) 0)))))
 
 (defun my/get-stale-org-entry-with-reason ()
   "Examine the entry at point and return (REASON HEADING MARKER).
 REASON is nil if the entry isn't stale, otherwise a short string
-describing why (\"DONE\", \"overdue scheduled\", etc)."
+describing why (\"DONE\" or \"past event\")."
   (let ((entry-todo-state (org-get-todo-state))
 	(entry-scheduled-time (org-get-scheduled-time (point)))
 	(entry-deadline-time (org-get-deadline-time (point)))
 	(entry-marker (point-marker)))
     (let ((reason (cond
-		   ((string= "DONE" entry-todo-state) "DONE")
-		   ((and entry-scheduled-time (my/is-time-past entry-scheduled-time)) "overdue scheduled")
-		   ((and entry-deadline-time (my/is-time-past entry-deadline-time)) "overdue deadline")
-		   ;; Only check for a bare past timestamp on entries with no
-		   ;; TODO state at all, i.e. plain calendar-style events.
-		   ;; Otherwise a TODO whose body happens to mention some
-		   ;; unrelated past date would get wrongly flagged.
-		   ((and (not entry-todo-state) (my/entry-has-past-plain-timestamp-p)) "past event"))))
+		   ((and (string= "DONE" entry-todo-state)
+			 (or (not entry-scheduled-time) (my/is-time-older-than entry-scheduled-time 0))
+			 (or (not entry-deadline-time) (my/is-time-older-than entry-deadline-time 0)))
+		    "DONE")
+		   ((and (not entry-todo-state) (my/org-entry-has-past-plain-timestamp-p)) "past event"))))
       (list reason (org-get-heading t t t t) entry-marker))))
 
 (defun my/list-stale-org-entries ()
@@ -68,13 +65,13 @@ across `org-agenda-files'."
 				      (seq-filter (lambda (entry) (car entry)) (org-map-entries (lambda () (my/get-stale-org-entry-with-reason))))))))
     results))
 
-(defun my/org-archive-entry (marker)
+(defun my/archive-org-entry (marker)
   "Archive the entry at MARKER to `org-archive-file'."
   (org-with-point-at marker
     (let ((org-archive-location (concat org-archive-file "::")))
       (org-archive-subtree))))
 
-(defun my/org-archive-stale-entries ()
+(defun my/archive-stale-org-entries ()
   "Find and archive every stale entry across `org-agenda-files'.
 Archives one entry at a time so a single malformed entry doesn't
 abort the whole run; failures are logged with `message' and skipped.
@@ -83,10 +80,39 @@ Saves all modified buffers afterward."
     (dolist (entry (my/list-stale-org-entries))
       (condition-case err
 	  (progn
-	    (my/org-archive-entry (caddr entry))
+	    (my/archive-org-entry (caddr entry))
 	    (cl-incf success-counter))
 	(error (message "Error: %s %s" err (cadr entry)))))
     (message "Archived %d entries." success-counter)
     (save-some-buffers t)))
 
-(my/org-archive-stale-entries)
+(defun my/archived-entry-too-old-p ()
+  "Non-nil if the entry at point has an ARCHIVE_TIME older than 180 days."
+  (let ((archive-time (org-entry-get (point) "ARCHIVE_TIME")))
+    (and archive-time
+	 (my/is-time-older-than (org-time-string-to-time archive-time) 180))))
+
+(defun my/delete-org-entry (marker)
+  "Delete the entry at MARKER."
+  (org-with-point-at marker
+    (org-cut-subtree)))
+
+(defun my/clean-up-archive ()
+  "Delete entries in `org-archive-location' that were archived more than six months ago."
+  (let ((success-counter 0))
+    (dolist (entry (seq-filter #'identity
+			       (with-current-buffer (find-file-noselect org-archive-file)
+				 (org-map-entries
+				  (lambda ()
+				    (when (my/archived-entry-too-old-p)
+				      (point-marker)))))))
+      (condition-case err
+	  (progn
+	    (my/delete-org-entry entry)
+	    (cl-incf success-counter))
+	(error (message "Error: %s %s" err (marker-buffer entry)))))
+    (message "Deleted %d entries." success-counter)
+    (save-some-buffers t)))
+
+(my/archive-stale-org-entries)
+(my/clean-up-archive)
