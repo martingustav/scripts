@@ -1,16 +1,24 @@
 ;;; org-stale.el --- Archive stale Org entries -*- lexical-binding: t; -*-
 
 ;; Meant to be run unattended via:
-;;   emacs --batch -l org-stale.el
+;;   emacs --batch -l org-stale.el [ORG-DIR]
+;; ORG-DIR is optional and defaults to the Linux path below, so
+;; on machines where the notes live somewhere else, e.g. on Windows:
+;;   emacs.exe --batch -l org-stale.el "C:/Users/you/notes/org"
 ;; Loading this file has a side effect: the very last line calls
 ;; my/archive-stale-org-entries, which archives entries and saves buffers.
 ;; Don't load it inside a normal interactive session unless that's what you want.
 
 (require 'org)
-(setq org-agenda-files (list "/mnt/dietpi_userdata/syncthing/notes/org"))
-(defvar org-archive-file "/mnt/dietpi_userdata/syncthing/notes/org/arkiv.org"
+(defvar my/org-stale-directory
+  (or (car command-line-args-left) "/mnt/dietpi_userdata/syncthing/notes/org")
+  "Directory scanned for stale entries. See file header for how to override.")
+(setq org-agenda-files (list my/org-stale-directory))
+(defvar org-archive-file (expand-file-name "arkiv.org" my/org-stale-directory)
   "Path to the single file all stale entries are archived into.")
-(setq backup-directory-alist '(("." . "/tmp")))
+;; temporary-file-directory resolves correctly on both Linux (/tmp)
+;; and Windows (%TEMP%), unlike a hardcoded /tmp.
+(setq backup-directory-alist `(("." . ,temporary-file-directory)))
 
 (defun my/is-time-older-than (time days)
   "Non-nil if TIME's day is older than DAYS days ago."
