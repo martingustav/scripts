@@ -13,13 +13,24 @@
 (setq backup-directory-alist '(("." . "/tmp")))
 
 (defun my/is-time-older-than (time days)
-  "Non-nil if TIME's day is older than DAY's days ago."
+  "Non-nil if TIME's day is older than DAYS days ago."
   (< (time-to-days time) (time-to-days (time-subtract (current-time) (days-to-time days)))))
+
+(defun my/timestamp-end-time (timestamp-string)
+  "Return the time value for the end of a range in TIMESTAMP-STRING,
+or the time value for TIMESTAMP-STRING itself if it isn't a range.
+A range looks like \"<2026-01-01>--<2026-01-05>\"; only the part
+after -- is used, so a still-ongoing range isn't treated as past
+just because its start date has passed."
+  (if (string-match "--" timestamp-string)
+      (org-time-string-to-time (substring timestamp-string (match-end 0)))
+    (org-time-string-to-time timestamp-string)))
 
 (defun my/org-entry-has-past-plain-timestamp-p ()
   "Non-nil if the entry at point contains a plain timestamp before today.
 Looks at bare timestamps in the entry body (e.g. from the \"Calendar
-event\" capture template), not SCHEDULED/DEADLINE properties."
+event\" capture template), not SCHEDULED/DEADLINE properties. If the
+timestamp is a range, only a range whose END has passed counts."
   (save-excursion
     ;; Both args to org-end-of-subtree must be t here: this jumps to the
     ;; start of the *next* heading (or end of buffer), which is always a
@@ -32,21 +43,38 @@ event\" capture template), not SCHEDULED/DEADLINE properties."
       (org-back-to-heading t)
       (forward-line 1) ; skip past the heading line itself
       (when (re-search-forward org-ts-regexp-both end t)
-	(my/is-time-older-than (org-time-string-to-time (match-string 0)) 0)))))
+	(let* ((first-match (match-string 0))
+	       ;; Check whether a "--<timestamp>" immediately follows,
+	       ;; meaning this is a range, not a single date.
+	       (full-text
+		(if (looking-at (concat "--" org-ts-regexp-both))
+		    (concat first-match (match-string 0))
+		  first-match)))
+	  (my/is-time-older-than (my/timestamp-end-time full-text) 0))))))
 
 (defun my/get-stale-org-entry-with-reason ()
   "Examine the entry at point and return (REASON HEADING MARKER).
 REASON is nil if the entry isn't stale, otherwise a short string
 describing why (\"DONE\" or \"past event\")."
-  (let ((entry-todo-state (org-get-todo-state))
-	(entry-scheduled-time (org-get-scheduled-time (point)))
-	(entry-deadline-time (org-get-deadline-time (point)))
-	(entry-marker (point-marker)))
+  (let* ((entry-todo-state (org-get-todo-state))
+	 ;; Read SCHEDULED/DEADLINE as raw text rather than via
+	 ;; org-get-scheduled-time/org-get-deadline-time, since those
+	 ;; don't expose range information (they'd silently return just
+	 ;; the start of a multi-day range).
+	 (entry-scheduled-raw (org-entry-get (point) "SCHEDULED"))
+	 (entry-deadline-raw (org-entry-get (point) "DEADLINE"))
+	 (entry-scheduled-time (and entry-scheduled-raw (my/timestamp-end-time entry-scheduled-raw)))
+	 (entry-deadline-time (and entry-deadline-raw (my/timestamp-end-time entry-deadline-raw)))
+	 (entry-marker (point-marker)))
     (let ((reason (cond
 		   ((and (string= "DONE" entry-todo-state)
 			 (or (not entry-scheduled-time) (my/is-time-older-than entry-scheduled-time 0))
 			 (or (not entry-deadline-time) (my/is-time-older-than entry-deadline-time 0)))
 		    "DONE")
+		   ;; Only check for a bare past timestamp on entries with no
+		   ;; TODO state at all, i.e. plain calendar-style events.
+		   ;; Otherwise a TODO whose body happens to mention some
+		   ;; unrelated past date would get wrongly flagged.
 		   ((and (not entry-todo-state) (my/org-entry-has-past-plain-timestamp-p)) "past event"))))
       (list reason (org-get-heading t t t t) entry-marker))))
 
