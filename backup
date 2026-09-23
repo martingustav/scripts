@@ -17,7 +17,6 @@ selected_dirs=(
 
 # Print selected directories
 echo "Directories to backup:"
-echo
 for dir in "${selected_dirs[@]}"; do
     echo "  - $dir"
 done
@@ -44,6 +43,34 @@ echo "Moving backup to external storage..."
 mv -v "$backup_file" "$backup_dir/$(date +%F)/"
 
 echo " done."
+
+echo
+
+# Delete backups older than a year
+mapfile -t old_backups < <(find $backup_dir -mtime +365 -type d | LC_ALL=C sort)
+
+if [[ "${#old_backups[@]}" -gt 0 ]]; then
+    echo "The following backups are older than a year and will be deleted:"
+
+    for dir in "${old_backups[@]}"; do
+	echo "$(basename $dir)"
+    done
+
+    echo
+    read -p "Is this ok [y/N]: " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+	for dir in "${old_backups[@]}"; do
+	    rm -r $dir
+	done
+	echo
+	echo "Old backups deleted."
+    else
+	echo
+	echo "Old backups not deleted."
+    fi
+    echo
+fi
 
 # Calculate minutes and seconds
 minutes=$((SECONDS / 60))
