@@ -18,9 +18,18 @@ list_albums() {
     done < <(find "$base" -mindepth 2 -maxdepth 2 -type d | LC_ALL=C sort)
 }
 
+# Safely prints an array's elements one per line, even when empty.
+# Avoids the `printf '%s\n' "${arr[@]}"` gotcha, which prints a
+# single blank line for an empty array instead of nothing.
+print_lines() {
+    local -n arr_ref="$1"
+    ((${#arr_ref[@]} > 0)) && printf '%s\n' "${arr_ref[@]}"
+}
+
 dry_run_flag=""
 verbose_flag=""
 source_base="$HOME/Music"
+source_playlist_base="$HOME/Music/playlists"
 dest_mount=""
 dest_base=""
 
@@ -57,13 +66,58 @@ if [[ -z "$dest_mount" ]]; then
     exit 1
 fi
 
+# Playlist diffing
+mapfile -t source_playlists < <(find "$source_playlist_base" -maxdepth 1 \( -iname '*.m3u' -o -iname '*.m3u8' \) -printf '%f\n' | LC_ALL=C sort)
+mapfile -t dest_playlists < <(find "$dest_base" -maxdepth 1 \( -iname '*.m3u' -o -iname '*.m3u8' \) -printf '%f\n'| LC_ALL=C sort)
+mapfile -t missing_playlists_on_dest < <(LC_ALL=C comm -23 <(print_lines source_playlists) <(print_lines dest_playlists))
+mapfile -t missing_playlists_on_source < <(LC_ALL=C comm -23 <(print_lines dest_playlists) <(print_lines source_playlists))
+
+found_diff=false
+
+if [[ "${#missing_playlists_on_dest[@]}" -gt 0 ]]; then
+    echo "Playlists missing from destination:"
+    for playlist in "${missing_playlists_on_dest[@]}"; do
+	echo "- $playlist"
+    done
+    found_diff=true
+fi
+
+if [[ "${#missing_playlists_on_source[@]}" -gt 0 ]]; then
+    echo
+    echo "Playlists missing from source:"
+    for playlist in "${missing_playlists_on_source[@]}"; do
+	echo "- $playlist"
+    done
+    found_diff=true
+fi
+
+if [[ "$found_diff" == false ]]; then
+    echo "No playlist diff."
+fi
+
+mapfile -t common_playlists < <(LC_ALL=C comm -12 <(print_lines source_playlists) <(print_lines dest_playlists))
+
+for playlist in "${common_playlists[@]}"; do
+    src_file="$source_playlist_base/$playlist"
+    dst_file="$dest_base/$playlist"
+
+    if ! diff -q "$src_file" "$dst_file" > /dev/null; then
+	echo
+	echo "=== Diff for $playlist ==="
+	diff -u "$src_file" "$dst_file"
+	echo
+    fi
+done
+
+# Album diffing
 mapfile -t source_albums < <(list_albums "$source_base")
 mapfile -t dest_albums < <(list_albums "$dest_base")
-mapfile -t missing_albums < <(LC_ALL=C comm -23 <(printf '%s\n' "${source_albums[@]}") <(printf '%s\n' "${dest_albums[@]}"))
+mapfile -t missing_albums < <(LC_ALL=C comm -23 <(print_lines source_albums) <(print_lines dest_albums))
 
 if [[ "${#missing_albums[@]}" -eq 0 ]]; then
-    echo "No missing albums. Exiting now."
-    exit 0
+    echo
+    echo "No missing albums."
+    exit 1
 fi
 
 echo "${#missing_albums[@]} album(s) will be copied to $dest_base:"
@@ -109,7 +163,7 @@ if [[ "${#failed_albums[@]}" -gt 0 ]]; then
     done
 fi
 
-mapfile -t extra_on_device < <(LC_ALL=C comm -13 <(printf '%s\n' "${source_albums[@]}") <(printf '%s\n' "${dest_albums[@]}"))
+mapfile -t extra_on_device < <(LC_ALL=C comm -13 <(print_lines source_albums) <(print_lines dest_albums))
 
 if [[ "${#extra_on_device[@]}" -gt 0 ]]; then
     echo
